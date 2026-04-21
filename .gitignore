@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.pyc
+
+# Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Local data
+.env
+storage/*
+!storage/.gitkeep
+
+# Build and OS
+dist/
+build/
+.DS_Store
+Thumbs.db
