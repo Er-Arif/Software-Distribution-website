@@ -58,3 +58,18 @@ def sign_payload(payload: dict[str, Any], expires_in_seconds: int = 900) -> dict
         "algorithm": alg,
         "public_key_id": settings.signing_key_id,
     }
+
+
+def verify_signed_payload(signed: dict[str, Any]) -> bool:
+    payload = signed["payload"]
+    signature = base64.urlsafe_b64decode(signed["signature"])
+    body = _canonical(payload)
+    if payload["exp"] < int(datetime.now(UTC).timestamp()):
+        return False
+    if signed["algorithm"] == "EdDSA":
+        PUBLIC_KEY.verify(signature, body)
+        return True
+    if signed["algorithm"] == "RS256":
+        PUBLIC_KEY.verify(signature, body, padding.PKCS1v15(), hashes.SHA256())
+        return True
+    return False

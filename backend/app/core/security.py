@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
@@ -45,6 +45,12 @@ def create_refresh_token(user_id: UUID) -> tuple[str, datetime]:
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+
+
+def hash_token(token: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def generate_license_key(prefix: str = "SW") -> str:

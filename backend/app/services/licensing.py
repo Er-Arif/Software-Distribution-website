@@ -13,6 +13,7 @@ from app.db.models import (
     License,
     LicenseActivation,
     LicensePolicy,
+    LicenseValidationNonce,
     Product,
 )
 from app.schemas import FingerprintInput
@@ -80,6 +81,30 @@ def _license_state(license_obj: License) -> str:
     return license_obj.status
 
 
+def record_validation_nonce(
+    db: Session,
+    nonce: str | None,
+    license_id=None,
+    device_id=None,
+    ttl_seconds: int = 900,
+) -> None:
+    if not nonce:
+        return
+    existing = db.scalar(select(LicenseValidationNonce).where(LicenseValidationNonce.nonce == nonce))
+    if existing:
+        emit_event(db, "license.replay_rejected", "license", str(license_id) if license_id else None, {"nonce": nonce})
+        raise HTTPException(status_code=409, detail="Replay nonce already used")
+    db.add(
+        LicenseValidationNonce(
+            nonce=nonce,
+            license_id=license_id,
+            device_id=device_id,
+            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+        )
+    )
+    db.flush()
+
+
 def _entitlements(db: Session, license_obj: License) -> dict:
     rows = db.scalars(
         select(Entitlement).where(
@@ -105,7 +130,7 @@ def activate_license(
 ) -> dict:
     license_obj, product = _load_license(db, license_key, product_slug)
     state = _license_state(license_obj)
-    if state in {"revoked", "suspended", "blacklisted"}:
+    if state in {"revoked", "suspended", "blacklisted", "expired"}:
         raise HTTPException(status_code=403, detail=f"License is {state}")
 
     fp_hash = fingerprint_hash(fingerprint)
@@ -188,8 +213,12 @@ def validate_license(
     product_slug: str,
     app_version: str,
     fingerprint: FingerprintInput,
+    client_nonce: str | None = None,
 ) -> dict:
     license_obj, product = _load_license(db, license_key, product_slug)
+    state = _license_state(license_obj)
+    if state in {"revoked", "suspended", "blacklisted"}:
+        raise HTTPException(status_code=403, detail=f"License is {state}")
     fp_hash = fingerprint_hash(fingerprint)
     device = db.scalar(select(Device).where(Device.fingerprint_hash == fp_hash, Device.user_id == license_obj.user_id))
     if not device:
@@ -203,6 +232,7 @@ def validate_license(
     )
     if not activation:
         raise HTTPException(status_code=403, detail="Activation is not active")
+    record_validation_nonce(db, client_nonce, license_obj.id, device.id)
     activation.last_validated_at = datetime.now(UTC)
     activation.app_version = app_version
     emit_event(db, "license.validated", "license", str(license_obj.id), {"device_id": str(device.id)})

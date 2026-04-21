@@ -40,6 +40,7 @@ def validate(payload: LicenseValidateRequest, db: Session = Depends(get_db)) -> 
         payload.product_slug,
         payload.app_version,
         payload.fingerprint,
+        payload.cached_token_nonce,
     )
     db.commit()
     return signed
@@ -47,7 +48,14 @@ def validate(payload: LicenseValidateRequest, db: Session = Depends(get_db)) -> 
 
 @router.post("/licenses/heartbeat")
 def heartbeat(payload: LicenseValidateRequest, db: Session = Depends(get_db)) -> dict:
-    signed = validate_license(db, payload.license_key, payload.product_slug, payload.app_version, payload.fingerprint)
+    signed = validate_license(
+        db,
+        payload.license_key,
+        payload.product_slug,
+        payload.app_version,
+        payload.fingerprint,
+        payload.cached_token_nonce,
+    )
     db.commit()
     return signed
 

@@ -10,6 +10,10 @@ class TokenPair(BaseModel):
     token_type: str = "bearer"
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=2, max_length=160)
@@ -106,3 +110,23 @@ class SupportTicketCreate(BaseModel):
     body: str = Field(min_length=4)
     product_id: UUID | None = None
     priority: str = "normal"
+
+
+class AdminProductCreate(BaseModel):
+    name: str
+    slug: str
+    tagline: str
+    short_description: str
+    long_description: str
+    supported_os: list[str] = []
+    status: str = "draft"
+
+
+class AdminPlanCreate(BaseModel):
+    product_id: UUID
+    name: str
+    code: str
+    license_type: str = "subscription"
+    price_amount: float
+    currency: str = "INR"
+    billing_interval: str | None = "year"

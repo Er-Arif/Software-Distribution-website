@@ -73,6 +73,15 @@ class RefreshToken(Base, TimestampMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class LicenseValidationNonce(Base, TimestampMixin):
+    __tablename__ = "license_validation_nonces"
+    id = pk()
+    nonce: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    license_id = mapped_column(ForeignKey("licenses.id"), nullable=True, index=True)
+    device_id = mapped_column(ForeignKey("devices.id"), nullable=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ProductCategory(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "product_categories"
     id = pk()
@@ -221,6 +230,18 @@ class Payment(Base, TimestampMixin):
     amount: Mapped[float] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class RefundRecord(Base, TimestampMixin):
+    __tablename__ = "refund_records"
+    id = pk()
+    payment_id = mapped_column(ForeignKey("payments.id"), index=True)
+    provider_refund_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    amount: Mapped[float] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    reason: Mapped[str | None] = mapped_column(String(255))
     raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

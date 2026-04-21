@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,7 +16,7 @@ router = APIRouter(dependencies=[Depends(rate_limit("download"))])
 
 @router.get("/builds/{build_id}/signed-url", response_model=DownloadLink)
 def signed_download_url(
-    build_id: str,
+    build_id: UUID,
     request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),

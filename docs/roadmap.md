@@ -2,8 +2,8 @@
 
 ## Near Term
 
-- Complete full CRUD coverage in admin screens.
-- Add real provider calls for Razorpay and PayPal checkout creation.
+- Expand admin CRUD screens from API-backed operational tables into full editing forms.
+- Add live provider calls for Razorpay and PayPal checkout creation.
 - Add admin 2FA UI and recovery codes.
 - Add richer invoice PDF rendering.
 - Add upload flow for installers and release approvals.
