@@ -4,6 +4,7 @@ from uuid import uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -39,8 +40,8 @@ class SoftDeleteMixin:
 user_roles = Table(
     "user_roles",
     Base.metadata,
-    mapped_column("user_id", ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-    mapped_column("role_id", ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
 )
 
 

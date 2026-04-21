@@ -6,7 +6,8 @@ Create Date: 2026-04-22
 """
 
 from alembic import op
-import sqlalchemy as sa
+from app.db.base import Base
+from app.db import models  # noqa: F401
 
 revision = "0001_initial_platform"
 down_revision = None
@@ -16,9 +17,8 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
-    # The initial migration is intentionally generated from SQLAlchemy metadata in early
-    # development. Run `alembic revision --autogenerate` before production freeze.
+    Base.metadata.create_all(bind=op.get_bind())
 
 
 def downgrade() -> None:
-    pass
+    Base.metadata.drop_all(bind=op.get_bind())
