@@ -61,5 +61,12 @@ def heartbeat(payload: LicenseValidateRequest, db: Session = Depends(get_db)) ->
 
 
 @router.get("/updates/manifest")
-def update_manifest(product_slug: str, os: str, architecture: str, current_version: str, db: Session = Depends(get_db)):
-    return latest_manifest(db, product_slug, os, architecture, current_version) or {"update_available": False}
+def update_manifest(
+    product_slug: str,
+    os: str,
+    architecture: str,
+    current_version: str,
+    license_key: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return latest_manifest(db, product_slug, os, architecture, current_version, license_key) or {"update_available": False}

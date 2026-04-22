@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.core.signing import verify_signed_payload
-from app.db.models import AuditLog, DomainEvent, InvoiceRecord, License, Order, Payment, ProductVersion, Subscription, SupportTicket
+from app.db.models import AuditLog, DomainEvent, FileMetadata, InvoiceRecord, License, Order, Payment, ProductVersion, Subscription, SupportTicket
 from app.schemas import FingerprintInput
 from app.services.licensing import activate_license, validate_license
 from app.services.payments import (
@@ -75,6 +75,45 @@ def test_license_activation_validation_device_limit_replay_and_revocation(db_ses
     assert revoked is not None
 
 
+def test_fingerprint_tolerance_and_compatibility_flags(db_session):
+    _, product, _, _, license_obj, _, _ = create_licensed_customer(db_session, max_devices=1)
+    product.min_backend_supported_version = "2.0.0"
+    activate_license(
+        db_session,
+        license_obj.key,
+        product.slug,
+        "1.0.0",
+        FingerprintInput(
+            os="windows",
+            app_installation_id="install-1",
+            machine_id="machine-1",
+            cpu_hash="cpu-old",
+            motherboard_hash="board-1",
+        ),
+        "Laptop",
+        "127.0.0.1",
+    )
+    tolerated = activate_license(
+        db_session,
+        license_obj.key,
+        product.slug,
+        "1.0.0",
+        FingerprintInput(
+            os="windows",
+            app_installation_id="install-1",
+            machine_id="machine-1",
+            cpu_hash="cpu-new",
+            motherboard_hash="board-1",
+        ),
+        "Laptop changed",
+        "127.0.0.1",
+    )
+    assert verify_signed_payload(tolerated)
+    assert tolerated["payload"]["force_upgrade"] is True
+    assert tolerated["payload"]["app_compatible"] is False
+    assert tolerated["payload"]["device"]["confidence_score"] >= 80
+
+
 def test_expired_license_returns_signed_limited_state(db_session):
     _, product, _, _, license_obj, _, _ = create_licensed_customer(db_session)
     license_obj.expires_at = datetime.now(UTC) - timedelta(days=1)
@@ -133,6 +172,9 @@ def test_download_update_rollback_support_and_audit(client, db_session):
     )
     assert download.status_code == 200
     assert download.json()["checksum_sha256"] == "a" * 64
+    available = client.get("/api/v1/customer/available-downloads", headers={"Authorization": f"Bearer {token}"})
+    assert available.status_code == 200
+    assert available.json()[0]["build_id"] == str(build.id)
 
     rollback = type(version)(
         product_id=product.id,
@@ -143,10 +185,11 @@ def test_download_update_rollback_support_and_audit(client, db_session):
     db_session.add(rollback)
     db_session.flush()
     version.rollback_to_version_id = rollback.id
-    manifest = latest_manifest(db_session, product.slug, "windows", "x64", "0.1.0")
+    manifest = latest_manifest(db_session, product.slug, "windows", "x64", "0.1.0", license_obj.key)
     assert verify_signed_payload(manifest)
     assert manifest["payload"]["rollback_active"] is True
     assert manifest["payload"]["version"] == "0.9.0"
+    assert manifest["payload"]["update_eligible"] is True
 
     admin = create_user(db_session, email="admin@example.com", role_name="admin")
     db_session.commit()
@@ -158,6 +201,32 @@ def test_download_update_rollback_support_and_audit(client, db_session):
     )
     assert revoke.status_code == 200
     assert db_session.query(AuditLog).filter(AuditLog.action == "license.revoke").count() == 1
+
+
+def test_download_blocks_unclean_files_expired_update_access_and_unpublished_builds(client, db_session):
+    user, product, _, _, license_obj, version, build = create_licensed_customer(db_session)
+    db_session.commit()
+    token = client.post("/api/v1/auth/login", json={"email": user.email, "password": "Password123!"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    version.status = "draft"
+    db_session.commit()
+    unpublished = client.get(f"/api/v1/downloads/builds/{build.id}/signed-url", headers=headers)
+    assert unpublished.status_code == 403
+
+    version.status = "published"
+    file_obj = db_session.get(FileMetadata, build.file_id)
+    file_obj.scan_status = "pending"
+    db_session.commit()
+    unclean = client.get(f"/api/v1/downloads/builds/{build.id}/signed-url", headers=headers)
+    assert unclean.status_code == 403
+
+    file_obj.scan_status = "clean"
+    version.published_at = datetime.now(UTC)
+    license_obj.update_access_expires_at = datetime.now(UTC) - timedelta(days=1)
+    db_session.commit()
+    expired_access = client.get(f"/api/v1/downloads/builds/{build.id}/signed-url", headers=headers)
+    assert expired_access.status_code == 403
 
 
 def test_support_notifications_events_are_separate(client, db_session):
@@ -172,6 +241,13 @@ def test_support_notifications_events_are_separate(client, db_session):
         json={"subject": "Activation help", "body": "I need help activating.", "priority": "high"},
     )
     assert created.status_code == 200
+    ticket_id = created.json()["id"]
+    reply = client.post(
+        f"/api/v1/support/tickets/{ticket_id}/reply",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"body": "Adding details."},
+    )
+    assert reply.status_code == 200
     assert db_session.query(DomainEvent).filter(DomainEvent.event_type == "support.ticket_created").count() == 1
     assert db_session.query(AuditLog).count() == 0
 

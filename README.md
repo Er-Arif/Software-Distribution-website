@@ -64,3 +64,4 @@ The browser QA command launches Microsoft Edge/Chromium headlessly, visits publi
 Documentation should be updated with every implementation milestone. Git commits should be made after each meaningful update with clear messages.
 
 See `docs/` for detailed architecture and operations guides.
+See `docs/strict-completion-pass.md` for the latest verified flow-completion report and remaining production-launch gaps.

@@ -1,11 +1,13 @@
 import { DashboardShell } from "@/components/dashboard-shell";
+import { CustomerSupportComposer } from "@/components/operations";
 import { ResourceTable } from "@/components/resource-table";
 
 export default function CustomerSupportPage() {
   return (
     <DashboardShell mode="customer">
       <h1 className="text-3xl font-bold">Support</h1>
-      <div className="mt-6">
+      <div className="mt-6 grid gap-6">
+        <CustomerSupportComposer />
         <ResourceTable title="Support Tickets" path="/customer/support-tickets" />
       </div>
     </DashboardShell>

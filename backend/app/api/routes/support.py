@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import current_user, require_roles
 from app.db.models import SupportTicket, TicketMessage, User
-from app.schemas import SupportTicketCreate
-from app.services.events import emit_event
+from app.schemas import SupportReplyCreate, SupportTicketCreate
+from app.services.events import audit, emit_event, notify
 
 router = APIRouter()
 
@@ -19,6 +19,7 @@ def create_ticket(payload: SupportTicketCreate, user: User = Depends(current_use
     db.flush()
     db.add(TicketMessage(ticket_id=ticket.id, author_id=user.id, body=payload.body))
     emit_event(db, "support.ticket_created", "support_ticket", str(ticket.id), {})
+    notify(db, user.id, "support_ticket_created", "Support ticket opened", ticket.subject, {"ticket_id": str(ticket.id)})
     db.commit()
     return {"id": str(ticket.id), "status": ticket.status}
 
@@ -38,11 +39,17 @@ def ticket_detail(ticket_id: UUID, user: User = Depends(current_user), db: Sessi
 
 
 @router.post("/tickets/{ticket_id}/reply")
-def customer_reply(ticket_id: UUID, body: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+def customer_reply(
+    ticket_id: UUID,
+    payload: SupportReplyCreate,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
     ticket = db.get(SupportTicket, ticket_id)
     if not ticket or ticket.user_id != user.id:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    db.add(TicketMessage(ticket_id=ticket.id, author_id=user.id, body=body))
+    db.add(TicketMessage(ticket_id=ticket.id, author_id=user.id, body=payload.body))
+    ticket.status = "open"
     emit_event(db, "support.customer_replied", "support_ticket", str(ticket.id), {})
     db.commit()
     return {"status": "sent"}
@@ -51,15 +58,17 @@ def customer_reply(ticket_id: UUID, body: str, user: User = Depends(current_user
 @router.post("/admin/tickets/{ticket_id}/reply")
 def staff_reply(
     ticket_id: UUID,
-    body: str,
+    payload: SupportReplyCreate,
     staff: User = Depends(require_roles("super_admin", "admin", "support")),
     db: Session = Depends(get_db),
 ) -> dict:
     ticket = db.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    db.add(TicketMessage(ticket_id=ticket.id, author_id=staff.id, body=body))
+    db.add(TicketMessage(ticket_id=ticket.id, author_id=staff.id, body=payload.body))
     ticket.status = "waiting_on_customer"
+    audit(db, "support.reply", "support_ticket", staff.id, str(ticket.id), {})
     emit_event(db, "support.staff_replied", "support_ticket", str(ticket.id), {})
+    notify(db, ticket.user_id, "support_reply", "Support replied", ticket.subject, {"ticket_id": str(ticket.id)})
     db.commit()
     return {"status": "sent"}

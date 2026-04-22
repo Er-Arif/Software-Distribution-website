@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from app.core.security import hash_password
 from app.db.models import (
     AppUpdateChannel,
+    ActivationRule,
     BuildAsset,
     Entitlement,
     FileMetadata,
@@ -75,6 +76,8 @@ def create_product_graph(db, license_type="subscription", max_devices=2):
     )
     channel = AppUpdateChannel(product_id=product.id, name="Stable", slug="stable", is_default=True)
     db.add_all([plan, policy, channel])
+    db.flush()
+    db.add(ActivationRule(policy_id=policy.id, tolerance_score=80))
     db.flush()
     version = ProductVersion(
         product_id=product.id,

@@ -1,3 +1,5 @@
+from datetime import UTC
+
 from fastapi import APIRouter, Depends
 from uuid import UUID
 from sqlalchemy import select
@@ -5,9 +7,18 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import current_user
-from app.db.models import Device, Download, InvoiceRecord, License, LicenseActivation, Notification, Order, Product, SupportTicket, User
+from app.db.models import BuildAsset, Device, Download, FileMetadata, InvoiceRecord, License, LicenseActivation, Notification, Order, Product, ProductVersion, SupportTicket, User
+from app.services.licensing import is_license_usable
 
 router = APIRouter()
+
+
+def _as_utc(value):
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @router.get("/dashboard")
@@ -71,6 +82,47 @@ def deactivate_device(device_id: UUID, user: User = Depends(current_user), db: S
 def downloads(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(Download).where(Download.user_id == user.id).order_by(Download.created_at.desc())).all()
     return [{"id": str(row.id), "status": row.status, "product_id": str(row.product_id), "created_at": row.created_at} for row in rows]
+
+
+@router.get("/available-downloads")
+def available_downloads(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.execute(
+        select(License, Product, ProductVersion, BuildAsset, FileMetadata)
+        .join(Product, Product.id == License.product_id)
+        .join(ProductVersion, ProductVersion.product_id == Product.id)
+        .join(BuildAsset, BuildAsset.product_version_id == ProductVersion.id)
+        .join(FileMetadata, FileMetadata.id == BuildAsset.file_id)
+        .where(
+            License.user_id == user.id,
+            License.deleted_at.is_(None),
+            ProductVersion.status == "published",
+            ProductVersion.deleted_at.is_(None),
+            BuildAsset.deleted_at.is_(None),
+            FileMetadata.scan_status.in_(["clean", "trusted"]),
+        )
+        .order_by(Product.name, ProductVersion.published_at.desc().nullslast(), ProductVersion.created_at.desc())
+    ).all()
+    downloads = []
+    for license_obj, product, version, build, file_obj in rows:
+        if not is_license_usable(license_obj):
+            continue
+        published_at = _as_utc(version.published_at)
+        update_access_expires_at = _as_utc(license_obj.update_access_expires_at)
+        if published_at and update_access_expires_at and published_at > update_access_expires_at:
+            continue
+        downloads.append(
+            {
+                "product": product.name,
+                "version": version.version,
+                "build_id": str(build.id),
+                "os": build.os,
+                "architecture": build.architecture,
+                "installer_type": build.installer_type,
+                "checksum_sha256": build.checksum_sha256,
+                "size_bytes": file_obj.size_bytes,
+            }
+        )
+    return downloads
 
 
 @router.get("/billing")

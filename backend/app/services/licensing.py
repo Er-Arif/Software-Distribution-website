@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 from fastapi import HTTPException, status
+from packaging.version import InvalidVersion, Version
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,7 @@ from app.core.signing import sign_payload
 from app.db.models import (
     Device,
     Entitlement,
+    ActivationRule,
     License,
     LicenseActivation,
     LicensePolicy,
@@ -35,6 +37,75 @@ def fingerprint_hash(fingerprint: FingerprintInput) -> str:
         ]
     )
     return sha256(basis.encode("utf-8")).hexdigest()
+
+
+def _version_lt(left: str, right: str) -> bool:
+    try:
+        return Version(left) < Version(right)
+    except InvalidVersion:
+        return left < right
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _fingerprint_confidence(stored: dict, incoming: FingerprintInput) -> int:
+    incoming_components = incoming.model_dump()
+    score = 0
+    if stored.get("app_installation_id") and stored.get("app_installation_id") == incoming_components.get("app_installation_id"):
+        score += 40
+    if stored.get("machine_id") and stored.get("machine_id") == incoming_components.get("machine_id"):
+        score += 30
+    if stored.get("os") and stored.get("os") == incoming_components.get("os"):
+        score += 10
+    if stored.get("cpu_hash") and stored.get("cpu_hash") == incoming_components.get("cpu_hash"):
+        score += 10
+    if stored.get("motherboard_hash") and stored.get("motherboard_hash") == incoming_components.get("motherboard_hash"):
+        score += 10
+    if not stored.get("machine_id") and stored.get("fallback_hash") and stored.get("fallback_hash") == incoming_components.get("fallback_hash"):
+        score += 30
+    return min(score, 100)
+
+
+def _activation_rule(db: Session, policy_id) -> ActivationRule | None:
+    return db.scalar(
+        select(ActivationRule).where(
+            ActivationRule.policy_id == policy_id,
+            ActivationRule.deleted_at.is_(None),
+        )
+    )
+
+
+def _find_tolerated_device(db: Session, license_obj: License, fingerprint: FingerprintInput) -> Device | None:
+    policy = license_obj.policy
+    rule = _activation_rule(db, policy.id)
+    tolerance = rule.tolerance_score if rule else 80
+    candidates = db.scalars(
+        select(Device).where(
+            Device.user_id == license_obj.user_id,
+            Device.deleted_at.is_(None),
+            Device.status == "active",
+        )
+    ).all()
+    best_device = None
+    best_score = 0
+    for candidate in candidates:
+        score = _fingerprint_confidence(candidate.fingerprint_components or {}, fingerprint)
+        if score > best_score:
+            best_device = candidate
+            best_score = score
+    if best_device and best_score >= tolerance:
+        best_device.fingerprint_hash = fingerprint_hash(fingerprint)
+        best_device.fingerprint_version = fingerprint.version
+        best_device.fingerprint_components = fingerprint.model_dump()
+        best_device.confidence_score = best_score
+        return best_device
+    return None
 
 
 def create_manual_license(
@@ -76,9 +147,14 @@ def _license_state(license_obj: License) -> str:
     now = datetime.now(UTC)
     if license_obj.status in {"revoked", "suspended", "blacklisted"}:
         return license_obj.status
-    if license_obj.expires_at and license_obj.expires_at < now:
+    expires_at = _as_utc(license_obj.expires_at)
+    if expires_at and expires_at < now:
         return "expired"
     return license_obj.status
+
+
+def is_license_usable(license_obj: License) -> bool:
+    return _license_state(license_obj) == "active"
 
 
 def record_validation_nonce(
@@ -139,6 +215,8 @@ def activate_license(
 
     device = db.scalar(select(Device).where(Device.fingerprint_hash == fp_hash, Device.user_id == license_obj.user_id))
     if not device:
+        device = _find_tolerated_device(db, license_obj, fingerprint)
+    if not device:
         active_count = db.scalar(
             select(func.count(LicenseActivation.id))
             .where(LicenseActivation.license_id == license_obj.id, LicenseActivation.status == "active")
@@ -183,7 +261,10 @@ def activate_license(
 def signed_license_payload(db: Session, license_obj: License, product: Product, device: Device, activation: LicenseActivation) -> dict:
     policy = license_obj.policy
     state = _license_state(license_obj)
-    update_eligible = not license_obj.update_access_expires_at or license_obj.update_access_expires_at >= datetime.now(UTC)
+    update_access_expires_at = _as_utc(license_obj.update_access_expires_at)
+    update_eligible = not update_access_expires_at or update_access_expires_at >= datetime.now(UTC)
+    offline_days = policy.trial_offline_days if policy.license_type == "trial" or license_obj.source == "trial" else policy.offline_days
+    app_compatible = not _version_lt(activation.app_version or "0.0.0", product.min_backend_supported_version)
     payload = {
         "valid": state == "active",
         "status": state,
@@ -197,12 +278,17 @@ def signed_license_payload(db: Session, license_obj: License, product: Product, 
         },
         "activation_id": str(activation.id),
         "expires_at": license_obj.expires_at.isoformat() if license_obj.expires_at else None,
-        "offline_valid_until": (datetime.now(UTC) + timedelta(days=policy.offline_days)).isoformat(),
+        "offline_valid_until": None
+        if state in {"revoked", "suspended", "blacklisted"}
+        else (datetime.now(UTC) + timedelta(days=offline_days)).isoformat(),
         "revalidation_interval_hours": policy.revalidation_interval_hours,
         "expired_behavior": policy.expired_behavior,
         "update_eligible": update_eligible,
         "entitlements": _entitlements(db, license_obj),
         "minimum_backend_supported_app_version": product.min_backend_supported_version,
+        "app_compatible": app_compatible,
+        "force_upgrade": not app_compatible,
+        "clock_tamper_hint": {"server_timestamp": int(datetime.now(UTC).timestamp())},
     }
     return sign_payload(payload, expires_in_seconds=policy.revalidation_interval_hours * 3600)
 

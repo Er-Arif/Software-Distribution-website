@@ -110,6 +110,10 @@ class SupportTicketCreate(BaseModel):
     priority: str = "normal"
 
 
+class SupportReplyCreate(BaseModel):
+    body: str = Field(min_length=4)
+
+
 class AdminProductCreate(BaseModel):
     name: str
     slug: str

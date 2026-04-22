@@ -43,6 +43,7 @@ async function login(email, password) {
     ["GET", "/api/v1/auth/me"],
     ["GET", "/api/v1/customer/dashboard"],
     ["GET", "/api/v1/customer/products"],
+    ["GET", "/api/v1/customer/available-downloads"],
     ["GET", "/api/v1/customer/licenses"],
     ["GET", "/api/v1/customer/devices"],
     ["GET", "/api/v1/customer/downloads"],
