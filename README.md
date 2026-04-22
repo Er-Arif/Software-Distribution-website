@@ -36,6 +36,8 @@ docker compose exec backend python -m app.seed
 - MinIO console: http://localhost:9011
 - Redis host port: `6380` maps to container port `6379`
 
+If the frontend ever looks unstyled after local builds, restart the frontend container. Docker Compose keeps the container `.next` cache separate from the host to avoid Windows/Linux build-cache conflicts.
+
 Default seed accounts:
 
 - Admin: `admin@example.com` / `AdminPass123!`

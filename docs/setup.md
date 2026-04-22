@@ -22,6 +22,8 @@ Services:
 - MinIO: http://localhost:9011
 - Redis: host port `6380`, container/service port `6379`
 
+The frontend container uses its own `.next` cache volume. This prevents stale host build artifacts from breaking CSS or Next.js chunks inside Docker.
+
 ## Seed Accounts
 
 - Admin: `admin@example.com` / `AdminPass123!`
