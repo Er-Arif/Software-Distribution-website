@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/software_platform"
     redis_url: str = "redis://localhost:6379/0"
 
-    jwt_secret: str = Field(default="change-me")
+    jwt_secret: str = Field(default="change-me-long-random-secret-with-at-least-32-characters")
     jwt_access_minutes: int = 15
     jwt_refresh_days: int = 30
 

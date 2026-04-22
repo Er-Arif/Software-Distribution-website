@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, Boxes, CreditCard, Download, KeyRound, LifeBuoy, Settings, Users } from "lucide-react";
+import { BarChart3, Boxes, CreditCard, Download, FileText, KeyRound, LifeBuoy, Settings, Tag, Users } from "lucide-react";
 
 type NavItem = [label: string, href: string, Icon: LucideIcon];
 
@@ -16,9 +16,13 @@ const customerNav: NavItem[] = [
 const adminNav: NavItem[] = [
   ["Dashboard", "/admin", BarChart3],
   ["Products", "/admin/products", Boxes],
+  ["Plans", "/admin/plans", Tag],
+  ["Versions", "/admin/versions", Download],
   ["Customers", "/admin/customers", Users],
   ["Licenses", "/admin/licenses", KeyRound],
-  ["Downloads", "/admin/downloads", Download],
+  ["Payments", "/admin/payments", CreditCard],
+  ["Support", "/admin/support", LifeBuoy],
+  ["Legal", "/admin/legal", FileText],
   ["Analytics", "/admin/analytics", BarChart3],
   ["Settings", "/admin/settings", Settings]
 ];

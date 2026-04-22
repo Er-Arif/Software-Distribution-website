@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.core.signing import verify_signed_payload
-from app.db.models import AuditLog, DomainEvent, InvoiceRecord, License, Order, Payment, Subscription
+from app.db.models import AuditLog, DomainEvent, InvoiceRecord, License, Order, Payment, ProductVersion, Subscription, SupportTicket
 from app.schemas import FingerprintInput
 from app.services.licensing import activate_license, validate_license
 from app.services.payments import (
@@ -174,3 +174,85 @@ def test_support_notifications_events_are_separate(client, db_session):
     assert created.status_code == 200
     assert db_session.query(DomainEvent).filter(DomainEvent.event_type == "support.ticket_created").count() == 1
     assert db_session.query(AuditLog).count() == 0
+
+
+def test_admin_operational_crud_and_safeguards(client, db_session):
+    create_roles(db_session)
+    admin = create_user(db_session, email="ops@example.com", role_name="admin")
+    user = create_user(db_session, email="buyer@example.com", role_name="customer")
+    product, plan, policy, version, _ = create_product_graph(db_session)
+    db_session.commit()
+    token = client.post("/api/v1/auth/login", json={"email": admin.email, "password": "Password123!"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    analytics = client.get("/api/v1/admin/analytics", headers=headers)
+    assert analytics.status_code == 200
+    assert "active_licenses" in analytics.json()
+
+    policy_response = client.post(
+        "/api/v1/admin/policies",
+        headers=headers,
+        json={"name": "Enterprise Offline", "license_type": "lifetime", "offline_days": 30, "max_devices": 10},
+    )
+    assert policy_response.status_code == 200
+
+    license_response = client.post(
+        "/api/v1/admin/licenses",
+        headers=headers,
+        json={
+            "user_id": str(user.id),
+            "product_id": str(product.id),
+            "policy_id": str(policy.id),
+            "plan_id": str(plan.id),
+            "source": "manual",
+        },
+    )
+    assert license_response.status_code == 200
+    assert license_response.json()["key"].startswith("SW-")
+
+    version_response = client.post(
+        "/api/v1/admin/versions",
+        headers=headers,
+        json={"product_id": str(product.id), "version": "2.0.0", "status": "draft"},
+    )
+    assert version_response.status_code == 200
+    new_version_id = version_response.json()["id"]
+
+    build_response = client.post(
+        "/api/v1/admin/builds",
+        headers=headers,
+        json={
+            "product_version_id": new_version_id,
+            "os": "windows",
+            "architecture": "x64",
+            "installer_type": "msi",
+            "object_key": "codevault-pro/2.0.0/windows.msi",
+            "size_bytes": 2048,
+            "checksum_sha256": "b" * 64,
+            "code_signature_status": "signed",
+        },
+    )
+    assert build_response.status_code == 200
+
+    publish = client.post(f"/api/v1/admin/versions/{new_version_id}/publish?confirm=true", headers=headers)
+    assert publish.status_code == 200
+    fallback = db_session.query(ProductVersion).filter(ProductVersion.id == version.id).first()
+    rollback = client.post(
+        f"/api/v1/admin/versions/{new_version_id}/rollback?fallback_version_id={fallback.id}&confirm=true",
+        headers=headers,
+    )
+    assert rollback.status_code == 200
+
+    legal = client.post(
+        "/api/v1/admin/legal",
+        headers=headers,
+        json={"document_type": "terms", "title": "Terms", "body": "Updated terms", "version": "2.0"},
+    )
+    assert legal.status_code == 200
+
+    ticket = SupportTicket(user_id=user.id, product_id=product.id, subject="Help", priority="normal")
+    db_session.add(ticket)
+    db_session.commit()
+    closed = client.post(f"/api/v1/admin/support-tickets/{ticket.id}/close", headers=headers)
+    assert closed.status_code == 200
+    assert db_session.query(AuditLog).filter(AuditLog.action.in_(["license.create", "release.rollback", "legal.publish", "support.close"])).count() >= 4

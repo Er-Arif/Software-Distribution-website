@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class TokenPair(BaseModel):
@@ -26,6 +26,8 @@ class LoginRequest(BaseModel):
 
 
 class ProductOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
     slug: str
@@ -34,11 +36,10 @@ class ProductOut(BaseModel):
     supported_os: list[str]
     status: str
 
-    class Config:
-        from_attributes = True
-
 
 class PlanOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
     code: str
@@ -46,9 +47,6 @@ class PlanOut(BaseModel):
     price_amount: float
     currency: str
     billing_interval: str | None
-
-    class Config:
-        from_attributes = True
 
 
 class FingerprintInput(BaseModel):
@@ -130,3 +128,54 @@ class AdminPlanCreate(BaseModel):
     price_amount: float
     currency: str = "INR"
     billing_interval: str | None = "year"
+
+
+class AdminPolicyCreate(BaseModel):
+    name: str
+    license_type: str = "subscription"
+    offline_days: int = 7
+    trial_offline_days: int = 3
+    grace_days_after_payment_failure: int = 5
+    update_access_days: int | None = 365
+    max_devices: int = 1
+    revalidation_interval_hours: int = 24
+    expired_behavior: str = "limited"
+
+
+class AdminLicenseCreate(BaseModel):
+    user_id: UUID
+    product_id: UUID
+    policy_id: UUID
+    plan_id: UUID | None = None
+    source: str = "manual"
+    expires_at: datetime | None = None
+    max_devices_override: int | None = None
+
+
+class AdminVersionCreate(BaseModel):
+    product_id: UUID
+    version: str
+    status: str = "draft"
+    forced_update: bool = False
+    optional_update: bool = True
+
+
+class AdminBuildCreate(BaseModel):
+    product_version_id: UUID
+    os: str
+    architecture: str
+    installer_type: str
+    object_key: str
+    bucket: str = "private-installers"
+    size_bytes: int = 0
+    checksum_sha256: str
+    code_signature_status: str = "unsigned"
+    minimum_supported_version: str = "1.0.0"
+
+
+class AdminLegalDocumentUpsert(BaseModel):
+    document_type: str
+    title: str
+    body: str
+    version: str = "1.0"
+    publish: bool = True
