@@ -33,6 +33,7 @@ async function login(email, password) {
   const publicChecks = [
     ["GET", "/api/v1/health"],
     ["GET", "/api/v1/health/ready"],
+    ["GET", "/api/v1/metrics"],
     ["GET", "/api/v1/public/products"],
     ["GET", "/api/v1/public/products/codevault-pro"],
     ["GET", "/api/v1/public/changelog"],
@@ -65,6 +66,9 @@ async function login(email, password) {
     ["GET", "/api/v1/admin/versions"],
     ["GET", "/api/v1/admin/support-tickets"],
     ["GET", "/api/v1/admin/legal"],
+    ["GET", "/api/v1/admin/feature-flags"],
+    ["GET", "/api/v1/admin/entitlements"],
+    ["GET", "/api/v1/admin/invoices"],
     ["GET", "/api/v1/admin/audit-logs"],
     ["GET", "/api/v1/admin/events"]
   ];

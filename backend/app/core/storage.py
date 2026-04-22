@@ -32,6 +32,25 @@ class StorageService:
             ExpiresIn=ttl or settings.signed_url_ttl_seconds,
         )
 
+    def upload_bytes(self, bucket: str, object_key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        if self.client is None:
+            target = Path(".local-storage") / bucket / object_key
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            return
+        try:
+            self.client.put_object(Bucket=bucket, Key=object_key, Body=data, ContentType=content_type)
+        except Exception:
+            if settings.app_env == "production":
+                raise
+            target = Path(".local-storage") / bucket / object_key
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+
+
+def checksum_bytes(data: bytes) -> str:
+    return sha256(data).hexdigest()
+
 
 def checksum_file(path: Path) -> str:
     digest = sha256()

@@ -62,15 +62,42 @@ This repository is now a functional production-style foundation with verified co
 
 ## Still Pending For True Production Launch
 
-- Replace local payment abstractions with live Razorpay/PayPal SDK/API calls and provider-specific PayPal webhook signature verification.
-- Add full file upload UI and malware-scanning pipeline for installer assets.
-- Add complete CRUD forms for every admin entity: products, plans, policies, builds, customers, invoices, support status/priority, coupons, feature flags, entitlements, API keys, and settings.
-- Add production 2FA enrollment/verification for admins.
-- Move rate limiting from in-memory storage to Redis for multi-instance deployments.
+- Validate live Razorpay and PayPal flows with real production/sandbox credentials and provider dashboards.
+- Replace the built-in malware scanning hook with a production scanner service such as ClamAV, VirusTotal Enterprise, or a CI signing/scanning runner.
+- Add richer CRUD form coverage for lower-frequency admin entities such as coupons, API keys, tax profiles, billing addresses, and advanced settings.
 - Run Alembic migrations against a fresh production-like PostgreSQL database in CI.
 - Configure non-root Celery worker user in production images.
-- Add real email provider integration and PDF invoice generation.
 - Add deployed metrics/error-tracking dashboards and alert routing.
+
+## Second Strict Pass Additions
+
+- Payments:
+  - Razorpay checkout now creates live provider orders when credentials are configured, with local fallback for development.
+  - Razorpay webhook verification is strict when a webhook secret is configured and fails closed in production without a secret.
+  - PayPal checkout now creates live provider orders when credentials are configured, with local fallback for development.
+  - PayPal webhooks verify signatures through PayPal's verification API when `PAYPAL_WEBHOOK_ID` is configured and fail closed in production without it.
+  - Webhook records are idempotent and track failed processing/retry count.
+  - Payment success creates license, subscription, invoice record, invoice PDF metadata, notification, and email dispatch through the provider abstraction.
+  - Failed payments notify the customer and emit domain events.
+  - Refunds and partial refunds update payment/refund records.
+
+- Installer upload and release:
+  - Admin build upload accepts installer files, validates installer type and size, stores bytes through the storage abstraction, records SHA-256 checksum, and creates build/file metadata.
+  - Uploads run through a malware scanning hook with clean, pending, and blocked states.
+  - Release publish requires at least one build, clean/trusted scan status, and signed or explicitly not-required code-signing status.
+  - Downloads continue to block unpublished, unscanned, blocked, or expired-update-access builds.
+
+- Admin/security:
+  - Admin 2FA setup and enable flows are implemented with TOTP provisioning URI and recovery codes.
+  - Admin/support login enforces 2FA when enabled.
+  - Redis-backed rate limiting is used in normal runtime with in-memory fallback; tests force in-memory isolation.
+  - Feature flag, entitlement, and invoice list endpoints were added for admin visibility.
+
+- Notifications/billing/observability:
+  - SMTP email provider abstraction added with disabled-by-default safe local behavior.
+  - Minimal generated invoice PDF artifact is stored through the storage layer and linked to invoice records.
+  - Readiness checks now include Redis and storage status.
+  - Metrics endpoint exposes a minimal operational hook and error-tracking configuration state.
 
 ## Commands Run
 
@@ -96,7 +123,8 @@ docker compose logs --tail=30 scheduler
 
 - Backend tests: `13 passed`.
 - Frontend production build: passed.
-- API QA: `30 endpoints passed`.
+- Latest backend tests: `15 passed`.
+- API QA: `34 endpoints passed`.
 - Browser QA: `34 routes passed`.
 - Docker status: all seven services up.
 

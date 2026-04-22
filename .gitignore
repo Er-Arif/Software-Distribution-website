@@ -18,6 +18,8 @@ npm-debug.log*
 .env
 storage/*
 !storage/.gitkeep
+.local-storage/
+backend/.local-storage/
 
 # Build and OS
 dist/

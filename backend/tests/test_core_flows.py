@@ -1,7 +1,10 @@
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from app.core.signing import verify_signed_payload
-from app.db.models import AuditLog, DomainEvent, FileMetadata, InvoiceRecord, License, Order, Payment, ProductVersion, Subscription, SupportTicket
+from app.core.config import settings
+from app.core.totp import _hotp
+from app.db.models import AuditLog, BuildAsset, DomainEvent, FileMetadata, InvoiceRecord, License, Order, Payment, ProductVersion, Subscription, SupportTicket
 from app.schemas import FingerprintInput
 from app.services.licensing import activate_license, validate_license
 from app.services.payments import (
@@ -137,6 +140,7 @@ def test_verified_payment_issues_license_invoice_and_is_idempotent(db_session):
     assert db_session.query(Payment).filter(Payment.status == "paid").count() == 1
     assert db_session.query(License).count() == 1
     assert db_session.query(InvoiceRecord).count() == 1
+    assert db_session.query(InvoiceRecord).first().pdf_file_id is not None
     assert db_session.get(Order, order.id).status == "paid"
 
     subscription = db_session.query(Subscription).first()
@@ -158,6 +162,35 @@ def test_failed_payment_and_refund_paths(db_session):
     refund = process_refund(db_session, "pay_refund", 100, {"refund_id": "rfnd_1"}, partial=True)
     assert refund.status == "processed"
     assert payment.status == "partially_refunded"
+
+
+def test_paypal_checkout_and_webhook_flow(client, db_session, monkeypatch):
+    create_roles(db_session)
+    user = create_user(db_session)
+    _, plan, _, _, _ = create_product_graph(db_session)
+    db_session.commit()
+    token = client.post("/api/v1/auth/login", json={"email": user.email, "password": "Password123!"}).json()["access_token"]
+
+    monkeypatch.setattr("app.services.payment_providers.paypal_client.create_order", lambda amount, currency, custom_id: f"pp_{custom_id}")
+    monkeypatch.setattr("app.api.routes.payments.paypal_client.verify_webhook", lambda headers, payload: None)
+    checkout = client.post(
+        "/api/v1/payments/checkout",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"plan_code": plan.code, "provider": "paypal"},
+    )
+    assert checkout.status_code == 200
+    provider_order_id = checkout.json()["provider_order_id"]
+    webhook = client.post(
+        "/api/v1/payments/webhooks/paypal",
+        json={
+            "id": "evt_pp_1",
+            "event_type": "PAYMENT.CAPTURE.COMPLETED",
+            "resource": {"id": "cap_1", "custom_id": provider_order_id},
+        },
+    )
+    assert webhook.status_code == 200
+    assert db_session.query(Payment).filter(Payment.provider == "paypal", Payment.status == "paid").count() == 1
+    assert db_session.query(License).count() == 1
 
 
 def test_download_update_rollback_support_and_audit(client, db_session):
@@ -309,6 +342,9 @@ def test_admin_operational_crud_and_safeguards(client, db_session):
         },
     )
     assert build_response.status_code == 200
+    created_build = db_session.get(BuildAsset, UUID(build_response.json()["id"]))
+    db_session.get(FileMetadata, created_build.file_id).scan_status = "clean"
+    db_session.commit()
 
     publish = client.post(f"/api/v1/admin/versions/{new_version_id}/publish?confirm=true", headers=headers)
     assert publish.status_code == 200
@@ -332,3 +368,45 @@ def test_admin_operational_crud_and_safeguards(client, db_session):
     closed = client.post(f"/api/v1/admin/support-tickets/{ticket.id}/close", headers=headers)
     assert closed.status_code == 200
     assert db_session.query(AuditLog).filter(AuditLog.action.in_(["license.create", "release.rollback", "legal.publish", "support.close"])).count() >= 4
+
+
+def test_admin_upload_scan_publish_and_2fa(client, db_session):
+    create_roles(db_session)
+    admin = create_user(db_session, email="secure-admin@example.com", role_name="admin")
+    product, _, _, version, _ = create_product_graph(db_session)
+    db_session.commit()
+    token = client.post("/api/v1/auth/login", json={"email": admin.email, "password": "Password123!"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    malware = client.post(
+        f"/api/v1/admin/builds/upload?product_version_id={version.id}&os=windows&architecture=x64&installer_type=exe&code_signature_status=signed",
+        headers=headers,
+        files={"file": ("bad.exe", b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE", "application/octet-stream")},
+    )
+    assert malware.status_code == 200
+    assert malware.json()["scan_status"] == "blocked"
+
+    clean_version = ProductVersion(product_id=product.id, version="3.0.0", status="draft")
+    db_session.add(clean_version)
+    db_session.commit()
+    uploaded = client.post(
+        f"/api/v1/admin/builds/upload?product_version_id={clean_version.id}&os=windows&architecture=x64&installer_type=exe&code_signature_status=signed",
+        headers=headers,
+        files={"file": ("good.exe", b"installer-bytes", "application/octet-stream")},
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.json()["scan_status"] == "clean"
+    publish = client.post(f"/api/v1/admin/versions/{clean_version.id}/publish?confirm=true", headers=headers)
+    assert publish.status_code == 200
+
+    setup = client.post("/api/v1/admin/2fa/setup", headers=headers)
+    assert setup.status_code == 200
+    secret = setup.json()["secret"]
+    code = _hotp(secret, int(__import__("time").time() // 30))
+    enabled = client.post("/api/v1/admin/2fa/enable", headers=headers, json={"code": code})
+    assert enabled.status_code == 200
+    missing_code = client.post("/api/v1/auth/login", json={"email": admin.email, "password": "Password123!"})
+    assert missing_code.status_code == 401
+    with_code = client.post("/api/v1/auth/login", json={"email": admin.email, "password": "Password123!", "two_factor_code": code})
+    assert with_code.status_code == 200
+    assert db_session.query(AuditLog).filter(AuditLog.action.in_(["build.upload", "admin_2fa.enable"])).count() >= 2

@@ -61,6 +61,8 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     status: Mapped[str] = mapped_column(String(30), default="active", index=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    two_factor_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    two_factor_recovery_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     roles: Mapped[list[Role]] = relationship(secondary=user_roles, lazy="selectin")
 
 

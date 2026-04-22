@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -14,13 +14,16 @@ from app.services.payments import (
     record_webhook,
     verify_razorpay_webhook,
 )
+from app.services.payment_providers import paypal_client
 
 router = APIRouter()
 
 
 @router.post("/checkout", response_model=CheckoutResponse)
 def checkout(payload: CheckoutRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> CheckoutResponse:
-    order, payment = create_checkout(db, user.id, payload.plan_code)
+    if payload.provider not in {"razorpay", "paypal"}:
+        raise HTTPException(status_code=400, detail="Unsupported payment provider")
+    order, payment = create_checkout(db, user.id, payload.plan_code, payload.provider)
     db.commit()
     return CheckoutResponse(
         order_id=order.id,
@@ -38,32 +41,41 @@ async def razorpay_webhook(
     db: Session = Depends(get_db),
 ) -> dict:
     body = await request.body()
-    verify_razorpay_webhook(body, x_razorpay_signature)
-    payload = await request.json()
-    event_id = payload.get("event") + ":" + payload.get("created_at", "local")
-    webhook = record_webhook(db, "razorpay", event_id, payload)
-    if webhook.status == "received":
-        event_name = payload.get("event")
-        entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
-        if event_name == "payment.captured":
-            process_payment_success(
-                db,
-                entity.get("order_id"),
-                entity.get("id"),
-                {"provider": "razorpay", **payload},
-            )
-        elif event_name == "payment.failed":
-            process_payment_failed(db, entity.get("order_id"), {"provider": "razorpay", **payload})
-        elif event_name == "refund.processed":
-            refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
-            process_refund(
-                db,
-                refund.get("payment_id"),
-                float(refund.get("amount", 0)) / 100,
-                {"provider": "razorpay", "refund_id": refund.get("id"), **payload},
-                partial=bool(refund.get("amount") and entity.get("amount") and refund.get("amount") < entity.get("amount")),
-            )
-        webhook.status = "processed"
+    try:
+        verify_razorpay_webhook(body, x_razorpay_signature)
+        payload = await request.json()
+        event_id = payload.get("event") + ":" + str(payload.get("created_at", "local"))
+        webhook = record_webhook(db, "razorpay", event_id, payload)
+        if webhook.status == "received":
+            event_name = payload.get("event")
+            entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+            if event_name == "payment.captured":
+                process_payment_success(
+                    db,
+                    entity.get("order_id"),
+                    entity.get("id"),
+                    {"provider": "razorpay", **payload},
+                )
+            elif event_name == "payment.failed":
+                process_payment_failed(db, entity.get("order_id"), {"provider": "razorpay", **payload})
+            elif event_name == "refund.processed":
+                refund = payload.get("payload", {}).get("refund", {}).get("entity", {})
+                process_refund(
+                    db,
+                    refund.get("payment_id"),
+                    float(refund.get("amount", 0)) / 100,
+                    {"provider": "razorpay", "refund_id": refund.get("id"), **payload},
+                    partial=bool(refund.get("amount") and entity.get("amount") and refund.get("amount") < entity.get("amount")),
+                )
+            webhook.status = "processed"
+    except Exception:
+        db.rollback()
+        payload = await request.json()
+        webhook = record_webhook(db, "razorpay", payload.get("event", "unknown") + ":failed", payload)
+        webhook.status = "failed"
+        webhook.retry_count += 1
+        db.commit()
+        raise
     db.commit()
     return {"received": True}
 
@@ -71,6 +83,7 @@ async def razorpay_webhook(
 @router.post("/webhooks/paypal")
 async def paypal_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
     payload = await request.json()
+    paypal_client.verify_webhook({key.lower(): value for key, value in request.headers.items()}, payload)
     event_id = payload.get("id", "paypal-local")
     webhook = record_webhook(db, "paypal", event_id, payload)
     if webhook.status == "received":

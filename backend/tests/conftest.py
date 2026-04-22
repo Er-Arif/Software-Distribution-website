@@ -7,6 +7,18 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import get_db
 from app.db.base import Base
 from app.main import app
+from app.core.rate_limit import _memory_store
+from app.core.config import settings
+
+
+@pytest.fixture(autouse=True)
+def clear_rate_limits():
+    original_env = settings.app_env
+    settings.app_env = "test"
+    _memory_store.clear()
+    yield
+    _memory_store.clear()
+    settings.app_env = original_env
 
 
 @pytest.fixture()

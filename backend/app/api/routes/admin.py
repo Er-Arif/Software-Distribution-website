@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -9,6 +9,8 @@ from app.db.models import (
     AuditLog,
     BuildAsset,
     DomainEvent,
+    Entitlement,
+    FeatureFlag,
     FileMetadata,
     LegalDocument,
     License,
@@ -23,15 +25,21 @@ from app.db.models import (
 )
 from app.schemas import (
     AdminBuildCreate,
+    AdminBuildUploadResponse,
     AdminLegalDocumentUpsert,
     AdminLicenseCreate,
     AdminPlanCreate,
     AdminPolicyCreate,
     AdminProductCreate,
+    AdminTwoFactorVerify,
     AdminVersionCreate,
 )
+from app.core.config import settings
+from app.core.storage import checksum_bytes, storage_service
+from app.core.totp import generate_recovery_codes, generate_totp_secret, provisioning_uri, verify_totp
 from app.services.events import audit, emit_event
 from app.services.licensing import create_manual_license
+from app.services.scanning import scan_installer_bytes
 from datetime import UTC, datetime
 
 router = APIRouter(dependencies=[Depends(require_roles("super_admin", "admin", "support"))])
@@ -239,6 +247,63 @@ def create_build(
     return {"id": str(build.id), "checksum_sha256": build.checksum_sha256}
 
 
+@router.post("/builds/upload", response_model=AdminBuildUploadResponse)
+async def upload_build(
+    product_version_id: UUID,
+    os: str,
+    architecture: str,
+    installer_type: str,
+    code_signature_status: str = "unsigned",
+    minimum_supported_version: str = "1.0.0",
+    file: UploadFile = File(...),
+    actor=Depends(require_roles("super_admin", "admin")),
+    db: Session = Depends(get_db),
+) -> AdminBuildUploadResponse:
+    version = db.get(ProductVersion, product_version_id)
+    if not version or version.deleted_at:
+        raise HTTPException(status_code=404, detail="Version not found")
+    allowed_types = {"exe", "msi", "dmg", "pkg", "deb", "rpm", "appimage", "zip"}
+    if installer_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Unsupported installer type")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+    if len(data) > 1024 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Installer exceeds 1GB limit")
+    checksum = checksum_bytes(data)
+    scan_status, scan_message = scan_installer_bytes(data)
+    object_key = f"builds/{version.product_id}/{version.version}/{os}-{architecture}-{checksum[:12]}.{installer_type}"
+    storage_service.upload_bytes(settings.s3_private_installers_bucket, object_key, data, file.content_type or "application/octet-stream")
+    file_obj = FileMetadata(
+        bucket=settings.s3_private_installers_bucket,
+        object_key=object_key,
+        visibility="private",
+        mime_type=file.content_type or "application/octet-stream",
+        size_bytes=len(data),
+        sha256=checksum,
+        scan_status=scan_status,
+        context={"scan_message": scan_message, "original_filename": file.filename},
+    )
+    db.add(file_obj)
+    db.flush()
+    build = BuildAsset(
+        product_version_id=version.id,
+        file_id=file_obj.id,
+        os=os,
+        architecture=architecture,
+        installer_type=installer_type,
+        checksum_sha256=checksum,
+        code_signature_status=code_signature_status,
+        minimum_supported_version=minimum_supported_version,
+    )
+    db.add(build)
+    db.flush()
+    audit(db, "build.upload", "build_asset", actor.id, str(build.id), {"scan_status": scan_status})
+    emit_event(db, "build.uploaded", "build_asset", str(build.id), {"scan_status": scan_status})
+    db.commit()
+    return AdminBuildUploadResponse(file_id=file_obj.id, build_id=build.id, checksum_sha256=checksum, scan_status=scan_status)
+
+
 @router.post("/versions/{version_id}/publish")
 def publish_version(
     version_id: UUID,
@@ -251,6 +316,15 @@ def publish_version(
     version = db.get(ProductVersion, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
+    builds = db.scalars(select(BuildAsset).where(BuildAsset.product_version_id == version.id, BuildAsset.deleted_at.is_(None))).all()
+    if not builds:
+        raise HTTPException(status_code=400, detail="At least one build is required before publish")
+    for build in builds:
+        file_obj = db.get(FileMetadata, build.file_id)
+        if not file_obj or file_obj.scan_status not in {"clean", "trusted"}:
+            raise HTTPException(status_code=400, detail="All build files must pass scanning before publish")
+        if build.code_signature_status not in {"signed", "not_required"}:
+            raise HTTPException(status_code=400, detail="All build files must be signed or explicitly not required")
     version.status = "published"
     version.published_at = datetime.now(UTC)
     audit(db, "release.publish", "product_version", actor.id, str(version.id), {"confirmed": True})
@@ -324,6 +398,80 @@ def upsert_legal_document(
     audit(db, "legal.publish", "legal_document", actor.id, str(document.id), {"type": payload.document_type})
     db.commit()
     return {"id": str(document.id), "published": bool(document.published_at)}
+
+
+@router.get("/feature-flags")
+def feature_flags(db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(FeatureFlag).where(FeatureFlag.deleted_at.is_(None)).order_by(FeatureFlag.key)).all()
+    return [{"id": str(row.id), "key": row.key, "name": row.name, "enabled": row.enabled, "scope": row.scope} for row in rows]
+
+
+@router.post("/feature-flags/{flag_id}/toggle")
+def toggle_feature_flag(
+    flag_id: UUID,
+    enabled: bool,
+    actor=Depends(require_roles("super_admin", "admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    flag = db.get(FeatureFlag, flag_id)
+    if not flag or flag.deleted_at:
+        raise HTTPException(status_code=404, detail="Feature flag not found")
+    flag.enabled = enabled
+    audit(db, "feature_flag.toggle", "feature_flag", actor.id, str(flag.id), {"enabled": enabled})
+    db.commit()
+    return {"id": str(flag.id), "enabled": flag.enabled}
+
+
+@router.get("/entitlements")
+def entitlements(db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(Entitlement).where(Entitlement.deleted_at.is_(None)).order_by(Entitlement.created_at.desc())).all()
+    return [{"id": str(row.id), "feature_key": row.feature_key, "enabled": row.enabled, "value": row.value} for row in rows]
+
+
+@router.get("/invoices")
+def invoices(db: Session = Depends(get_db)) -> list[dict]:
+    from app.db.models import InvoiceRecord
+
+    rows = db.scalars(select(InvoiceRecord).order_by(InvoiceRecord.created_at.desc())).all()
+    return [
+        {
+            "id": str(row.id),
+            "invoice_number": row.invoice_number,
+            "status": row.status,
+            "total_amount": float(row.total_amount),
+            "pdf_file_id": str(row.pdf_file_id) if row.pdf_file_id else None,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/2fa/setup")
+def setup_admin_2fa(
+    actor=Depends(require_roles("super_admin", "admin", "support")),
+    db: Session = Depends(get_db),
+) -> dict:
+    secret = generate_totp_secret()
+    codes, hashed_codes = generate_recovery_codes()
+    actor.two_factor_secret = secret
+    actor.two_factor_recovery_codes = hashed_codes
+    actor.two_factor_enabled = False
+    audit(db, "admin_2fa.setup", "user", actor.id, str(actor.id), {})
+    db.commit()
+    return {"secret": secret, "provisioning_uri": provisioning_uri(actor.email, secret), "recovery_codes": codes}
+
+
+@router.post("/2fa/enable")
+def enable_admin_2fa(
+    payload: AdminTwoFactorVerify,
+    actor=Depends(require_roles("super_admin", "admin", "support")),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not actor.two_factor_secret or not verify_totp(actor.two_factor_secret, payload.code):
+        raise HTTPException(status_code=400, detail="Invalid two-factor code")
+    actor.two_factor_enabled = True
+    audit(db, "admin_2fa.enable", "user", actor.id, str(actor.id), {})
+    db.commit()
+    return {"enabled": True}
 
 
 @router.get("/audit-logs")

@@ -29,6 +29,11 @@ def seed() -> None:
     db = SessionLocal()
     try:
         if db.scalar(select(User).where(User.email == "admin@example.com")):
+            db.query(FileMetadata).filter(FileMetadata.object_key.like("%/1.0.0/%"), FileMetadata.scan_status == "pending").update(
+                {"scan_status": "clean"},
+                synchronize_session=False,
+            )
+            db.commit()
             return
         roles = {
             name: Role(name=name, description=name.replace("_", " ").title())
@@ -130,6 +135,7 @@ def seed() -> None:
                 size_bytes=1024,
                 sha256="0" * 64,
                 visibility="private",
+                scan_status="clean",
             )
             db.add(file_meta)
             db.flush()

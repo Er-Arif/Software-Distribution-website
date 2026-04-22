@@ -39,7 +39,16 @@ class Settings(BaseSettings):
     paypal_client_id: str = ""
     paypal_client_secret: str = ""
     paypal_webhook_id: str = ""
+    paypal_environment: Literal["sandbox", "live"] = "sandbox"
 
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_username: str = ""
+    smtp_password: str = ""
+    email_from: str = "hello@example.com"
+    email_enabled: bool = False
+    malware_scan_mode: Literal["disabled", "manual", "strict"] = "disabled"
+    admin_2fa_issuer: str = "Software Distribution Platform"
     sentry_dsn: str = ""
     log_level: str = "INFO"
 

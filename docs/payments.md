@@ -16,9 +16,11 @@ Razorpay is the primary India-friendly provider. PayPal is available as a second
 Webhook verification must be strict in production:
 
 - Razorpay uses HMAC SHA-256 verification.
-- PayPal should verify against the provider webhook verification endpoint.
+- PayPal verifies against the provider webhook verification endpoint when `PAYPAL_WEBHOOK_ID` is configured.
 - Webhook events are stored idempotently with provider and event ID.
 - Webhook processing should happen in background jobs for reliability.
+
+Local development falls back to deterministic local provider order IDs when live credentials are not configured. Production fails closed for missing webhook verification secrets.
 
 ## GST-Ready Data
 

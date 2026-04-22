@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.deps import current_user
 from app.core.rate_limit import rate_limit
 from app.core.security import create_access_token, create_refresh_token, decode_token, hash_password, hash_token, verify_password
+from app.core.totp import verify_totp, recovery_code_hash
 from app.db.models import RefreshToken, Role, User
 from app.schemas import LoginRequest, RefreshRequest, RegisterRequest, TokenPair
 from app.services.events import emit_event
@@ -48,6 +49,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenPair:
     if user.status != "active":
         raise HTTPException(status_code=403, detail="Account is not active")
     roles = [role.name for role in user.roles]
+    if user.two_factor_enabled and set(roles).intersection({"super_admin", "admin", "support"}):
+        if not payload.two_factor_code:
+            raise HTTPException(status_code=401, detail="Two-factor code required")
+        if user.two_factor_secret and verify_totp(user.two_factor_secret, payload.two_factor_code):
+            pass
+        elif recovery_code_hash(payload.two_factor_code) in (user.two_factor_recovery_codes or []):
+            user.two_factor_recovery_codes = [
+                item for item in (user.two_factor_recovery_codes or []) if item != recovery_code_hash(payload.two_factor_code)
+            ]
+        else:
+            emit_event(db, "auth.2fa_failed", "user", str(user.id), {})
+            db.commit()
+            raise HTTPException(status_code=401, detail="Invalid two-factor code")
     refresh, expires_at = create_refresh_token(user.id)
     db.add(RefreshToken(user_id=user.id, token_hash=hash_token(refresh), expires_at=expires_at))
     emit_event(db, "auth.login_success", "user", str(user.id), {})

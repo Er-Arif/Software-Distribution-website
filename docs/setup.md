@@ -40,6 +40,13 @@ python -B -m pytest tests -p no:cacheprovider
 
 The API QA script verifies public, customer, and admin endpoints against the running backend. The browser QA script uses a real headless browser session, checks all main public/customer/admin pages, and fails on console errors, failed requests, missing CSS, or bad HTTP responses.
 
+After pulling migrations, apply them before testing:
+
+```bash
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m app.seed
+```
+
 ## Seed Accounts
 
 - Admin: `admin@example.com` / `AdminPass123!`

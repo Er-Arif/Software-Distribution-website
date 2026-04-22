@@ -1,18 +1,18 @@
-import hmac
 from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.db.models import InvoiceRecord, LicensePolicy, Order, OrderItem, Payment, Plan, RefundRecord, Subscription, WebhookEvent
+from app.db.models import InvoiceRecord, LicensePolicy, Order, OrderItem, Payment, Plan, RefundRecord, Subscription, User, WebhookEvent
+from app.services.email import email_provider
 from app.services.events import emit_event, notify
+from app.services.invoices import attach_invoice_pdf
 from app.services.licensing import create_manual_license
+from app.services.payment_providers import paypal_client, razorpay_client
 
 
-def create_checkout(db: Session, user_id, plan_code: str) -> tuple[Order, Payment]:
+def create_checkout(db: Session, user_id, plan_code: str, provider: str = "razorpay") -> tuple[Order, Payment]:
     plan = db.scalar(select(Plan).where(Plan.code == plan_code, Plan.status == "active"))
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -33,10 +33,15 @@ def create_checkout(db: Session, user_id, plan_code: str) -> tuple[Order, Paymen
             unit_amount=plan.price_amount,
         )
     )
+    provider_order_id = (
+        paypal_client.create_order(float(order.total_amount), order.currency, str(order.id))
+        if provider == "paypal"
+        else razorpay_client.create_order(float(order.total_amount), order.currency, str(order.id))
+    )
     payment = Payment(
         order_id=order.id,
-        provider="razorpay",
-        provider_order_id=f"local_order_{order.id}",
+        provider=provider,
+        provider_order_id=provider_order_id,
         amount=order.total_amount,
         currency=order.currency,
         status="created",
@@ -48,18 +53,14 @@ def create_checkout(db: Session, user_id, plan_code: str) -> tuple[Order, Paymen
 
 
 def verify_razorpay_webhook(body: bytes, signature: str | None) -> None:
-    if not settings.razorpay_webhook_secret:
-        return
-    expected = hmac.new(settings.razorpay_webhook_secret.encode(), body, sha256).hexdigest()
-    if not signature or not hmac.compare_digest(expected, signature):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook signature")
+    razorpay_client.verify_webhook(body, signature)
 
 
 def record_webhook(db: Session, provider: str, event_id: str, payload: dict) -> WebhookEvent:
     existing = db.scalar(select(WebhookEvent).where(WebhookEvent.provider == provider, WebhookEvent.event_id == event_id))
     if existing:
         return existing
-    event = WebhookEvent(provider=provider, event_id=event_id, payload=payload)
+    event = WebhookEvent(provider=provider, event_id=event_id, status="received", payload=payload)
     db.add(event)
     emit_event(db, "webhook.received", "webhook", event_id, {"provider": provider})
     return event
@@ -127,6 +128,16 @@ def process_payment_success(db: Session, provider_order_id: str, provider_paymen
         tax_breakdown={"included": False, "tax_amount": float(order.tax_amount or 0)},
     )
     db.add(invoice)
+    db.flush()
+    user = db.get(User, order.user_id)
+    if user:
+        pdf_file = attach_invoice_pdf(db, invoice, order, payment, user)
+        email_provider.send(
+            user.email,
+            "Purchase complete",
+            "Your license has been issued. Your invoice is attached.",
+            [(f"{invoice.invoice_number}.pdf", b"Invoice stored in platform storage.", "text/plain")],
+        )
     emit_event(db, "payment.succeeded", "payment", str(payment.id), {"order_id": str(order.id)})
     notify(db, order.user_id, "purchase_success", "Purchase complete", "Your license has been issued.", {"license_id": str(license_obj.id)})
     db.flush()
@@ -143,6 +154,9 @@ def process_payment_failed(db: Session, provider_order_id: str, raw_payload: dic
     order.status = "payment_failed"
     emit_event(db, "payment.failed", "payment", str(payment.id), {"order_id": str(order.id)})
     notify(db, order.user_id, "payment_failed", "Payment failed", "Your payment could not be completed.", {})
+    user = db.get(User, order.user_id)
+    if user:
+        email_provider.send(user.email, "Payment failed", "Your payment could not be completed. Please retry from billing.")
     db.flush()
     return payment
 

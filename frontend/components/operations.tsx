@@ -98,8 +98,8 @@ export function CustomerDownloadActions() {
       <h2 className="text-lg font-semibold">Available Installers</h2>
       <div className="mt-4 space-y-3">
         {downloads.length === 0 ? <p className="text-sm text-slate-500">No entitled installers available.</p> : null}
-        {downloads.map((item) => (
-          <div key={String(item.build_id)} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-100 p-3 text-sm">
+        {downloads.map((item, index) => (
+          <div key={`${String(item.build_id)}-${index}`} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-100 p-3 text-sm">
             <div>
               <div className="font-medium">{item.product} {item.version}</div>
               <div className="text-slate-500">{item.os} {item.architecture} {item.installer_type}</div>

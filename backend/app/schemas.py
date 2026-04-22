@@ -23,6 +23,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    two_factor_code: str | None = None
 
 
 class ProductOut(BaseModel):
@@ -85,6 +86,7 @@ class SignedResponse(BaseModel):
 
 class CheckoutRequest(BaseModel):
     plan_code: str
+    provider: str = "razorpay"
     coupon_code: str | None = None
     billing_address_id: UUID | None = None
 
@@ -183,3 +185,14 @@ class AdminLegalDocumentUpsert(BaseModel):
     body: str
     version: str = "1.0"
     publish: bool = True
+
+
+class AdminTwoFactorVerify(BaseModel):
+    code: str = Field(min_length=6, max_length=32)
+
+
+class AdminBuildUploadResponse(BaseModel):
+    file_id: UUID
+    build_id: UUID
+    checksum_sha256: str
+    scan_status: str
