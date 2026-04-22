@@ -34,6 +34,7 @@ docker compose exec backend python -m app.seed
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000/docs
 - MinIO console: http://localhost:9001
+- Redis host port: `6380` maps to container port `6379`
 
 Default seed accounts:
 

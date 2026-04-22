@@ -6,6 +6,7 @@ pytest-cache-files-*/
 .ruff_cache/
 .venv/
 *.pyc
+celerybeat-schedule
 
 # Node
 node_modules/
