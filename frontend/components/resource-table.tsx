@@ -8,19 +8,27 @@ type ApiValue = string | number | boolean | null | Record<string, unknown> | Arr
 export function ResourceTable({ title, path }: { title: string; path: string }) {
   const [rows, setRows] = useState<Record<string, ApiValue>[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
+    if (!token) {
+      setError("You are not logged in. Please login first.");
+      setLoading(false);
+      return;
+    }
     fetch(`${apiBase}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Request failed: ${response.status}`);
         const data = await response.json();
         if (Array.isArray(data)) return data;
+        if (Array.isArray(data.invoices)) return data.invoices;
         if (Array.isArray(data.orders)) return data.orders;
         return [data];
       })
       .then(setRows)
-      .catch((err: Error) => setError(err.message));
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false));
   }, [path]);
 
   const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 6);
@@ -28,8 +36,9 @@ export function ResourceTable({ title, path }: { title: string; path: string }) 
   return (
     <section className="rounded-md border border-slate-200 bg-white p-5">
       <h2 className="text-lg font-semibold">{title}</h2>
+      {loading ? <p className="mt-3 text-sm text-slate-500">Loading live data...</p> : null}
       {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
-      {!error && rows.length === 0 ? <p className="mt-3 text-sm text-slate-500">No records yet.</p> : null}
+      {!loading && !error && rows.length === 0 ? <p className="mt-3 text-sm text-slate-500">No records yet.</p> : null}
       {rows.length > 0 ? (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-left text-sm">

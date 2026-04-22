@@ -19,7 +19,7 @@ Services:
 
 - Frontend: http://localhost:3000
 - API: http://localhost:8000/docs
-- MinIO: http://localhost:9001
+- MinIO: http://localhost:9011
 - Redis: host port `6380`, container/service port `6379`
 
 ## Seed Accounts

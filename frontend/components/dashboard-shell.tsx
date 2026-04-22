@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { BarChart3, Boxes, CreditCard, Download, FileText, KeyRound, LifeBuoy, Settings, Tag, Users } from "lucide-react";
 
@@ -29,12 +32,29 @@ const adminNav: NavItem[] = [
 
 export function DashboardShell({ children, mode }: { children: React.ReactNode; mode: "customer" | "admin" }) {
   const nav = mode === "admin" ? adminNav : customerNav;
+  const [email, setEmail] = useState("");
+
+  useEffect(() => {
+    const raw = localStorage.getItem("current_user");
+    if (raw) {
+      setEmail(JSON.parse(raw).email ?? "");
+    }
+  }, []);
+
+  function logout() {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+    localStorage.removeItem("current_user");
+    window.location.href = "/";
+  }
+
   return (
     <div className="min-h-screen bg-paper">
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-white p-5 md:block">
         <Link href="/" className="text-lg font-semibold text-ink">
           Software Store
         </Link>
+        {email ? <div className="mt-3 truncate text-xs text-slate-500">{email}</div> : null}
         <nav className="mt-8 space-y-1">
           {nav.map(([label, href, Icon]) => (
             <Link key={href} href={href} className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
@@ -43,6 +63,9 @@ export function DashboardShell({ children, mode }: { children: React.ReactNode; 
             </Link>
           ))}
         </nav>
+        <button onClick={logout} className="absolute bottom-5 left-5 right-5 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">
+          Logout
+        </button>
       </aside>
       <main className="md:pl-64">
         <div className="mx-auto max-w-7xl px-6 py-8">{children}</div>

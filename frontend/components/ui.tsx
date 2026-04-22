@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, ShieldCheck } from "lucide-react";
+import { AuthLinks } from "@/components/auth-links";
 
 export function Header() {
   return (
@@ -14,7 +15,7 @@ export function Header() {
           <Link href="/pricing">Pricing</Link>
           <Link href="/changelog">Changelog</Link>
           <Link href="/help">Help</Link>
-          <Link href="/login">Login</Link>
+          <AuthLinks />
         </nav>
       </div>
     </header>
