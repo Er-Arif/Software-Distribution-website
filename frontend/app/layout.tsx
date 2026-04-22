@@ -3,7 +3,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Software Distribution Platform",
-  description: "Sell, license, update, and distribute desktop software securely."
+  description: "Sell, license, update, and distribute desktop software securely.",
+  icons: {
+    icon: "/favicon.svg"
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

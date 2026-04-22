@@ -43,6 +43,22 @@ Default seed accounts:
 - Admin: `admin@example.com` / `AdminPass123!`
 - Customer: `customer@example.com` / `CustomerPass123!`
 
+## Verification
+
+With Docker running and seed data loaded:
+
+```bash
+cd frontend
+npm run qa:api
+npm run qa:browser
+npm run build
+
+cd ../backend
+python -B -m pytest tests -p no:cacheprovider
+```
+
+The browser QA command launches Microsoft Edge/Chromium headlessly, visits public, customer, and admin routes, and fails on HTTP errors, missing stylesheets, console warnings/errors, page errors, or failed asset requests.
+
 ## Milestone Notes
 
 Documentation should be updated with every implementation milestone. Git commits should be made after each meaningful update with clear messages.
